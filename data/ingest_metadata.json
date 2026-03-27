@@ -1,0 +1,50 @@
+{
+  "ingested_at": "2026-03-27T15:16:35.799240",
+  "input_dir": "C:\\Users\\kalvi\\Documents\\claude_internalQAsystem\\data",
+  "total_files": 5,
+  "successful": 5,
+  "failed": 0,
+  "total_chunks": 0,
+  "files": [
+    {
+      "file_name": "企业差旅报销管理制度（试行）.pdf",
+      "status": "success",
+      "num_pages": 3,
+      "num_chunks": 3,
+      "doc_id": "71b594485662",
+      "error": null
+    },
+    {
+      "file_name": "劳动合同 (2026专业标准版).pdf",
+      "status": "success",
+      "num_pages": 3,
+      "num_chunks": 5,
+      "doc_id": "82311c8cb879",
+      "error": null
+    },
+    {
+      "file_name": "员工手册.pdf",
+      "status": "success",
+      "num_pages": 51,
+      "num_chunks": 99,
+      "doc_id": "bf6163253fe1",
+      "error": null
+    },
+    {
+      "file_name": "员工手册（参考模板）.pdf",
+      "status": "success",
+      "num_pages": 26,
+      "num_chunks": 50,
+      "doc_id": "2b1c3e84a465",
+      "error": null
+    },
+    {
+      "file_name": "考核KPI办法.pdf",
+      "status": "success",
+      "num_pages": 5,
+      "num_chunks": 8,
+      "doc_id": "dbe04c373b3e",
+      "error": null
+    }
+  ]
+}

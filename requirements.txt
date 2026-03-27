@@ -1,0 +1,15 @@
+# Streamlit RAG 聊天界面依赖
+
+# Web 框架
+streamlit>=1.30.0
+
+# 向量数据库
+chromadb>=0.4.0
+
+# PDF 处理
+PyMuPDF>=1.23.0
+
+# LlamaIndex (LLM 调用)
+llama-index-core>=0.10.0
+llama-index-llms-dashscope>=0.1.0
+llama-index-embeddings-dashscope>=0.1.0
