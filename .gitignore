@@ -49,3 +49,11 @@ Thumbs.db
 # 数据文件
 data/*.pdf
 data/*.docx
+
+# 会话缓存
+conversation_sessions/
+semantic_cache/
+feedback_logs/
+
+# 编译文件
+*.pyc

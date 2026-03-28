@@ -13,3 +13,15 @@ PyMuPDF>=1.23.0
 llama-index-core>=0.10.0
 llama-index-llms-dashscope>=0.1.0
 llama-index-embeddings-dashscope>=0.1.0
+llama-index-vector-stores-chroma>=0.1.0
+
+# 混合检索 (BM25 + Rerank)
+rank-bm25>=0.2.2
+bge-reranker>=0.1.0
+FlagEmbedding>=1.2.0
+
+# 中文 NLP 工具
+jieba>=0.42.1
+
+# 数据验证
+pydantic>=2.0.0
