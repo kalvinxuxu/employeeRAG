@@ -1,6 +1,6 @@
-# Python RAG QA System
+# PDF 智能问答系统 (RAG QA System)
 
-基于 LlamaIndex 和 ChromaDB 的检索增强生成（RAG）问答系统。
+基于 LlamaIndex、ChromaDB 和 Streamlit 的 PDF 智能问答系统。
 
 ## 功能特性
 
@@ -8,6 +8,8 @@
 - 🔍 **向量检索** - ChromaDB 作为向量数据库
 - 🧠 **智能索引** - LlamaIndex 文本分块和索引
 - 💬 **语义查询** - 支持自然语言问答
+- 🌐 **Web 界面** - Streamlit 聊天界面，支持 PDF 预览
+- 🚀 **一键部署** - 支持 Vercel、Sealos Cloud 部署
 
 ## 快速开始
 
@@ -104,6 +106,30 @@ streamlit run app.py
 ```
 
 界面会自动在浏览器中打开，默认地址：http://localhost:8501
+
+## ☁️ 部署到 Sealos Cloud
+
+### 快速部署步骤：
+
+1. **构建并推送 Docker 镜像**
+   ```bash
+   # Windows 用户运行
+   deploy-sealos.bat
+
+   # 或 Linux/Mac 用户运行
+   bash deploy-sealos.sh
+   ```
+
+2. **在 Sealos Cloud 创建应用**
+   - 访问 https://cloud.sealos.io 并登录
+   - 点击「应用管理」→「应用」→「创建应用」
+   - 配置镜像、端口和环境变量
+
+3. **获取公开域名**
+   - 部署完成后获得 `https://pdf-qa-system-xxx.sealos.run` 域名
+   - 可在浏览器中公开访问
+
+详细部署指南请查看：[sealos-deploy.md](sealos-deploy.md)
 
 ## 开发工具
 
