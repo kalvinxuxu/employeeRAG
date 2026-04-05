@@ -1,0 +1,46 @@
+# Sealos 应用部署配置
+# 使用方法：
+# 1. 在 Sealos 控制台创建应用
+# 2. 选择 "Docker 镜像部署"
+# 3. 填写下方配置
+
+apps:
+  - name: pdf-qa-system
+    # Docker 镜像（需要提前推送到 Docker Hub）
+    image: kalvinxuxu/employeeRAG:latest
+
+    # 环境变量
+    env:
+      # 阿里云百炼 API Key（必需）
+      DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY}"
+      # Streamlit 端口
+      STREAMLIT_SERVER_PORT: "8501"
+
+    # 暴露端口
+    port: 8501
+
+    # 副本数
+    replicas: 1
+
+    # 资源限制
+    resources:
+      cpu: 0.5
+      memory: 512Mi
+
+    # 健康检查
+    healthCheck:
+      httpGet:
+        path: /
+        port: 8501
+      initialDelaySeconds: 10
+      periodSeconds: 30
+
+    # 标签
+    labels:
+      app: pdf-qa-system
+      type: streamlit-rag
+
+    # 注解
+    annotations:
+      description: "PDF 智能问答系统 - 基于 RAG 的文档问答"
+      author: "kalvinxuxu"

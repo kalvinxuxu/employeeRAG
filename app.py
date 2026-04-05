@@ -14,6 +14,10 @@ import re
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
+# 加载 .env 环境变量
+from dotenv import load_dotenv
+load_dotenv()
+
 import streamlit as st
 import chromadb
 import fitz  # PyMuPDF
@@ -46,7 +50,7 @@ CONFIG = {
     "keyword_weight": 0.5,          # 关键词检索权重
 
     # 响应速度优化配置
-    "use_cache": True,              # 是否启用语义缓存
+    "use_cache": False,             # 是否启用语义缓存（暂时禁用：BGE 模型下载慢）
     "cache_path": "./semantic_cache",  # 缓存路径
     "similarity_threshold": 0.95,   # 缓存相似度阈值
     "use_streaming": True,          # 是否启用流式输出
@@ -55,63 +59,56 @@ CONFIG = {
 
 # ==================== 自定义 Embedding 函数 ====================
 
-class DashScopeEmbeddingFunction:
-    """DashScope embedding 函数，用于 ChromaDB 查询"""
+class BGEEmbeddingFunction:
+    """BGE embedding 函数，用于 ChromaDB 查询（本地模型）"""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "text-embedding-v3"):
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
-        self.model = model
-        self._client = None
+    def __init__(self, model_name: str = "BAAI/bge-large-zh-v1.5"):
+        self.model_name = model_name
+        self._model = None
+
+        # 设置国内镜像源（解决 Hugging Face 连接问题）
+        import os
+        os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
     def name(self) -> str:
         """返回 embedding 函数名称"""
-        return f"dashscope-{self.model}"
+        return f"bge-{self.model_name}"
 
-    def _get_client(self):
-        """懒加载 DashScope 客户端"""
-        if self._client is None:
-            import dashscope
-            self._client = dashscope.TextEmbedding
-        return self._client
+    def _get_model(self):
+        """懒加载 BGE 模型"""
+        if self._model is None:
+            try:
+                from FlagEmbedding import FlagModel
+                self._model = FlagModel(
+                    self.model_name,
+                    query_instruction_for_retrieval="为这个句子生成表示以用于检索：",
+                    use_fp16=False
+                )
+            except ImportError:
+                print("[ERROR] FlagEmbedding 未安装，BGE 模型无法加载。请运行: pip install FlagEmbedding>=1.2.0")
+                raise
+        return self._model
 
     def __call__(self, input: List[str]) -> List[List[float]]:
         """生成 embedding"""
-        import dashscope
-        dashscope.api_key = self.api_key
+        model = self._get_model()
 
-        # 调用 DashScope API
-        response = dashscope.TextEmbedding.call(
-            model=self.model,
-            input=input,
-            text_type="document"
-        )
+        # 批量处理
+        MAX_BATCH_SIZE = 10
+        all_embeddings = []
 
-        if response.status_code == 200:
-            # 按原始顺序返回 embeddings
-            output = response.output.get("embeddings", [])
-            # 按 input 顺序排序
-            sorted_embeddings = sorted(output, key=lambda x: x.get("text_index", 0))
-            return [item.get("embedding") for item in sorted_embeddings]
-        else:
-            raise Exception(f"Embedding API 错误：{response.code} - {response.message}")
+        for i in range(0, len(input), MAX_BATCH_SIZE):
+            batch = input[i:i + MAX_BATCH_SIZE]
+            embeddings = model.encode(batch)
+            all_embeddings.extend([emb.tolist() if hasattr(emb, 'tolist') else list(emb) for emb in embeddings])
+
+        return all_embeddings
 
     def embed_query(self, input: str) -> List[List[float]]:
         """为单个查询生成 embedding"""
-        import dashscope
-        dashscope.api_key = self.api_key
-
-        response = dashscope.TextEmbedding.call(
-            model=self.model,
-            input=input,
-            text_type="query"
-        )
-
-        if response.status_code == 200:
-            embeddings = response.output.get("embeddings", [])
-            # 返回 List[List[float]] 格式（ChromaDB 要求）
-            return [embeddings[0].get("embedding")] if embeddings else [[]]
-        else:
-            raise Exception(f"Embedding API 错误：{response.code} - {response.message}")
+        model = self._get_model()
+        embedding = model.encode(input)
+        return [embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)]
 
     def embed_documents(self, documents: List[str]) -> List[List[float]]:
         """为多个文档生成 embedding"""
@@ -126,14 +123,9 @@ def get_hybrid_retriever():
     if not HYBRID_RETRIEVER_AVAILABLE:
         return None
 
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        return None
-
     retriever = HybridRetriever(
         chroma_path=CONFIG["chroma_path"],
         collection_name=CONFIG["collection_name"],
-        api_key=api_key,
         use_rerank=CONFIG.get("use_rerank", False),
         vector_weight=CONFIG.get("vector_weight", 0.5),
         keyword_weight=CONFIG.get("keyword_weight", 0.5),
@@ -158,17 +150,12 @@ def get_chroma_collection():
     """获取 ChromaDB 集合（向后兼容）"""
     client = chromadb.PersistentClient(path=CONFIG["chroma_path"])
 
-    # 使用 DashScope Embedding（与 ingest.py 保持一致）
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        st.error("未设置 DASHSCOPE_API_KEY 环境变量")
-        return None
-
-    dashscope_ef = DashScopeEmbeddingFunction(api_key=api_key)
+    # 使用 BGE Embedding（本地模型，与 ingest.py 保持一致）
+    bge_ef = BGEEmbeddingFunction(model_name="BAAI/bge-large-zh-v1.5")
 
     collection = client.get_or_create_collection(
         name=CONFIG["collection_name"],
-        embedding_function=dashscope_ef,
+        embedding_function=bge_ef,
     )
     return collection
 
@@ -297,13 +284,14 @@ def call_llm(query: str, context: str) -> str:
     Returns:
         AI 回答
     """
-    from llama_index.llms.dashscope import DashScope
+    from llama_index.llms.minimax import MiniMax
 
-    api_key = os.getenv("DASHSCOPE_API_KEY")
+    api_key = os.getenv("MINIMAX_API_KEY")
     if not api_key:
-        return "[错误] 未设置 DASHSCOPE_API_KEY 环境变量"
+        return "[错误] 未设置 MINIMAX_API_KEY 环境变量"
 
-    llm = DashScope(model=CONFIG["llm_model"], api_key=api_key)
+    api_base = os.getenv("MINIMAX_API_BASE_URL", "https://api.minimax.chat/v1")
+    llm = MiniMax(model="MiniMax-M2.7", api_key=api_key, api_base=api_base)
 
     prompt = f"""基于以下参考资料回答问题。如果资料中没有相关信息，请直接告知用户。
 
@@ -330,17 +318,18 @@ def call_llm_streaming(query: str, context: str):
         逐个生成的文本片段
     """
     try:
-        from llama_index.llms.dashscope import DashScope
+        from llama_index.llms.minimax import MiniMax
     except ImportError:
-        yield "[错误] 无法导入 DashScope LLM"
+        yield "[错误] 无法导入 MiniMax LLM"
         return
 
-    api_key = os.getenv("DASHSCOPE_API_KEY")
+    api_key = os.getenv("MINIMAX_API_KEY")
     if not api_key:
-        yield "[错误] 未设置 DASHSCOPE_API_KEY 环境变量"
+        yield "[错误] 未设置 MINIMAX_API_KEY 环境变量"
         return
 
-    llm = DashScope(model=CONFIG["llm_model"], api_key=api_key)
+    api_base = os.getenv("MINIMAX_API_BASE_URL", "https://api.minimax.chat/v1")
+    llm = MiniMax(model="MiniMax-M2.7", api_key=api_key, api_base=api_base)
 
     prompt = f"""基于以下参考资料回答问题。如果资料中没有相关信息，请直接告知用户。
 
@@ -690,10 +679,6 @@ def init_session_state():
 def get_knowledge_base_pdfs() -> List[dict]:
     """从 ChromaDB 获取知识库中已有的 PDF 列表"""
     try:
-        api_key = os.getenv("DASHSCOPE_API_KEY")
-        if not api_key:
-            return []
-
         # 创建 embedding 函数
         from chromadb import PersistentClient
 
@@ -735,10 +720,6 @@ def get_knowledge_base_pdfs() -> List[dict]:
 def get_metadata_options() -> Dict[str, List[str]]:
     """从 ChromaDB 获取元数据选项（部门、类别）"""
     try:
-        api_key = os.getenv("DASHSCOPE_API_KEY")
-        if not api_key:
-            return {"departments": [], "categories": []}
-
         from chromadb import PersistentClient
 
         db_client = PersistentClient(path=CONFIG["chroma_path"])
@@ -887,7 +868,7 @@ def quick_ingest_pdfs():
 
     except Exception as e:
         st.error(f"导入失败：{str(e)}")
-        st.info("💡 请确保已在终端配置好 DASHSCOPE_API_KEY 环境变量")
+        st.info("💡 请确保已安装 FlagEmbedding 库，BGE 模型会自动下载")
 
 
 def render_filter_panel():

@@ -12,12 +12,12 @@ PyMuPDF>=1.23.0
 # LlamaIndex (LLM 调用)
 llama-index-core>=0.10.0
 llama-index-llms-dashscope>=0.1.0
-llama-index-embeddings-dashscope>=0.1.0
+# llama-index-embeddings-dashscope>=0.1.0  # 已移除：改用本地 BGE 模型
 llama-index-vector-stores-chroma>=0.1.0
 
 # 混合检索 (BM25 + Rerank)
 rank-bm25>=0.2.2
-bge-reranker>=0.1.0
+# bge-reranker>=0.1.0  # 已移除：无 Python 3.11 兼容版本，Rerank 功能可选
 FlagEmbedding>=1.2.0
 
 # 中文 NLP 工具

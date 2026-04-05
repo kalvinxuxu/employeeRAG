@@ -36,7 +36,7 @@ class VectorRetriever:
     """向量检索器 - 基于 ChromaDB"""
 
     def __init__(self, chroma_path: str, collection_name: str = "legal_docs",
-                 api_key: Optional[str] = None, embedding_model: str = "text-embedding-v3",
+                 embedding_model: str = "BAAI/bge-large-zh-v1.5",
                  cache_embeddings: bool = True):
         """
         初始化向量检索器
@@ -44,13 +44,11 @@ class VectorRetriever:
         Args:
             chroma_path: ChromaDB 数据路径
             collection_name: 集合名称
-            api_key: DashScope API Key
-            embedding_model: Embedding 模型（text-embedding-v2 = 1024 维，text-embedding-v3 = 1536 维）
+            embedding_model: Embedding 模型（bge-large-zh-v1.5 = 1024 维，中文优化）
             cache_embeddings: 是否缓存 embedding 结果
         """
         self.chroma_path = chroma_path
         self.collection_name = collection_name
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
         self.embedding_model = embedding_model
         self.cache_embeddings = cache_embeddings
 
@@ -62,7 +60,7 @@ class VectorRetriever:
         self._query_embedding_cache: Dict[str, List[float]] = {}
 
     def _get_collection(self):
-        """懒加载 ChromaDB 集合（优化版）"""
+        """懒加载 ChromaDB 集合（使用 BGE 本地模型）"""
         if self._collection is None:
             import chromadb
             from chromadb.api.types import EmbeddingFunction
@@ -70,20 +68,38 @@ class VectorRetriever:
             # 初始化客户端
             self._client = chromadb.PersistentClient(path=self.chroma_path)
 
-            # 自定义 Embedding 函数（与 ingest_lite.py 保持一致）
-            class DashScopeEmbeddingFunction(EmbeddingFunction):
-                def __init__(self, api_key: str, model: str = "text-embedding-v3",
+            # BGE Embedding 函数（本地模型）
+            class BGEEmbeddingFunction(EmbeddingFunction):
+                def __init__(self, model_name: str = "BAAI/bge-large-zh-v1.5",
                              cache_embeddings: bool = True):
-                    self.api_key = api_key
-                    self.model = model
+                    self.model_name = model_name
                     self.cache_embeddings = cache_embeddings
                     self._embedding_cache: Dict[str, List[float]] = {}
                     self._cache_max_size = 1000
+                    self._model = None
+
+                    # 设置国内镜像源（解决 Hugging Face 连接问题）
+                    import os
+                    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+                def _get_model(self):
+                    """懒加载 BGE 模型"""
+                    if self._model is None:
+                        try:
+                            from FlagEmbedding import FlagModel
+                            self._model = FlagModel(
+                                self.model_name,
+                                query_instruction_for_retrieval="为这个句子生成表示以用于检索：",
+                                use_fp16=False
+                            )
+                        except ImportError:
+                            print("[ERROR] FlagEmbedding 未安装，BGE 模型无法加载。请运行: pip install FlagEmbedding>=1.2.0")
+                            raise
+                    return self._model
 
                 def __call__(self, input: list[str]) -> list[list[float]]:
                     """生成 embedding（支持批量处理和缓存）"""
-                    import dashscope
-                    dashscope.api_key = self.api_key
+                    model = self._get_model()
 
                     # 从缓存获取已知的 embedding
                     cached_results = {}
@@ -101,31 +117,20 @@ class VectorRetriever:
                         if not texts_to_compute:
                             return [cached_results[i] for i in range(len(input))]
 
-                    # 批量计算 embedding（优化：使用更大的批量）
-                    MAX_BATCH_SIZE = 25  # 提高批量大小
+                    # 批量计算 embedding
+                    MAX_BATCH_SIZE = 25
                     all_embeddings = {}
 
-                    # 分批次处理需要计算的文本
+                    # 分批次处理
                     for batch_idx in range(0, len(texts_to_compute), MAX_BATCH_SIZE):
                         batch = texts_to_compute[batch_idx:batch_idx + MAX_BATCH_SIZE]
                         batch_texts = [text for _, text in batch]
 
-                        response = dashscope.TextEmbedding.call(
-                            model=self.model,
-                            input=batch_texts,
-                            text_type="document"
-                        )
-
-                        if response.status_code != 200:
-                            raise Exception(f"Embedding API 错误：{response.code} - {response.message}")
-
-                        # 按原始顺序返回 embeddings
-                        output = response.output.get("embeddings", [])
-                        sorted_embeddings = sorted(output, key=lambda x: x.get("text_index", 0))
+                        embeddings = model.encode(batch_texts)
 
                         # 存储结果并缓存
                         for local_idx, (orig_idx, text) in enumerate(batch):
-                            embedding = sorted_embeddings[local_idx].get("embedding")
+                            embedding = embeddings[local_idx].tolist() if hasattr(embeddings[local_idx], 'tolist') else list(embeddings[local_idx])
                             all_embeddings[orig_idx] = embedding
 
                             # 缓存 embedding
@@ -143,9 +148,8 @@ class VectorRetriever:
 
                     return final_results
 
-            self._embedding_func = DashScopeEmbeddingFunction(
-                api_key=self.api_key,
-                model=self.embedding_model,
+            self._embedding_func = BGEEmbeddingFunction(
+                model_name="BAAI/bge-large-zh-v1.5",
                 cache_embeddings=self.cache_embeddings
             )
 
@@ -553,11 +557,10 @@ class HybridRetriever:
     """
 
     def __init__(self, chroma_path: str, collection_name: str = "legal_docs",
-                 api_key: Optional[str] = None,
                  use_rerank: bool = True,
                  vector_weight: float = 0.5,
                  keyword_weight: float = 0.5,
-                 embedding_model: str = "text-embedding-v3",
+                 embedding_model: str = "BAAI/bge-large-zh-v1.5",
                  bm25_max_docs: int = 5000,  # BM25 索引最大文档数
                  precompute_bm25: bool = True,  # 是否预计算 BM25 索引
                  cache_embeddings: bool = True,  # 是否缓存 embedding
@@ -568,18 +571,16 @@ class HybridRetriever:
         Args:
             chroma_path: ChromaDB 路径
             collection_name: 集合名称
-            api_key: DashScope API Key
             use_rerank: 是否启用 Rerank
             vector_weight: 向量权重
             keyword_weight: 关键词权重
-            embedding_model: Embedding 模型（v2=1024 维，v3=1536 维）
+            embedding_model: Embedding 模型（bge-large-zh-v1.5 = 1024 维，中文优化）
             bm25_max_docs: BM25 索引最大文档数（限制内存占用）
             precompute_bm25: 是否预计算 BM25 索引（启动时加载）
             cache_embeddings: 是否缓存 embedding 结果
         """
         self.chroma_path = chroma_path
         self.collection_name = collection_name
-        self.api_key = api_key
         self.use_rerank = use_rerank
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
@@ -592,8 +593,8 @@ class HybridRetriever:
         self.vector_retriever = VectorRetriever(
             chroma_path=chroma_path,
             collection_name=collection_name,
-            api_key=api_key,
-            embedding_model=embedding_model
+            embedding_model=embedding_model,
+            cache_embeddings=cache_embeddings
         )
         self.bm25_retriever = None  # 延迟初始化
         self.fusion = HybridFusion(
@@ -760,7 +761,6 @@ _default_retriever: Optional[HybridRetriever] = None
 
 def get_retriever(chroma_path: str = "./chroma_db",
                   collection_name: str = "legal_docs",
-                  api_key: Optional[str] = None,
                   use_rerank: bool = True) -> HybridRetriever:
     """获取全局检索器实例（单例模式）"""
     global _default_retriever
@@ -768,15 +768,13 @@ def get_retriever(chroma_path: str = "./chroma_db",
         _default_retriever = HybridRetriever(
             chroma_path=chroma_path,
             collection_name=collection_name,
-            api_key=api_key,
             use_rerank=use_rerank
         )
     return _default_retriever
 
 
 def hybrid_search(query: str, top_k: int = 5,
-                  chroma_path: str = "./chroma_db",
-                  api_key: Optional[str] = None) -> List[Dict]:
+                  chroma_path: str = "./chroma_db") -> List[Dict]:
     """
     便捷函数：执行混合检索
 
@@ -784,28 +782,21 @@ def hybrid_search(query: str, top_k: int = 5,
         query: 查询
         top_k: 返回数量
         chroma_path: ChromaDB 路径
-        api_key: API Key
 
     Returns:
         检索结果列表
     """
-    retriever = get_retriever(chroma_path=chroma_path, api_key=api_key)
+    retriever = get_retriever(chroma_path=chroma_path)
     return retriever.retrieve(query, top_k=top_k)
 
 
 # ==================== 命令行测试 ====================
 
 if __name__ == "__main__":
-    # 测试
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        print("[ERROR] 请设置 DASHSCOPE_API_KEY 环境变量")
-        exit(1)
-
+    # 测试（BGE 本地模型，无需 API Key）
     retriever = HybridRetriever(
         chroma_path="./chroma_db",
         collection_name="legal_docs",
-        api_key=api_key,
         use_rerank=False  # 先测试不启用 rerank
     )
 

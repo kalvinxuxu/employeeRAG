@@ -37,8 +37,82 @@ from metadata_tagger import MetadataTagger, extract_document_tags
 
 # ==================== 自定义 Embedding 函数 ====================
 
-class DashScopeEmbeddingFunction(EmbeddingFunction):
-    """DashScope embedding 函数用于 ChromaDB"""
+class EmbeddingFactory:
+    """Embedding 工厂类 - 根据网络情况自动选择模型"""
+
+    @staticmethod
+    def get_embedding(model_name: str = "bge-large-zh-v1.5", api_key: str = None):
+        """
+        获取 Embedding 函数
+
+        Args:
+            model_name: 模型名称
+            api_key: DashScope API Key（可选）
+
+        Returns:
+            Embedding 函数实例
+        """
+        # 优先尝试本地 BGE 模型
+        if model_name.startswith("bge-"):
+            try:
+                from FlagEmbedding import FlagModel
+                # 设置国内镜像源
+                import os
+                os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+                return BGEEmbeddingFunction(model_name=model_name)
+            except Exception as e:
+                print(f"[WARN] BGE 模型加载失败：{e}")
+                print("[INFO] 切换到 DashScope Embedding API")
+
+        # 回退到 DashScope API
+        if not api_key:
+            api_key = os.getenv("DASHSCOPE_API_KEY")
+        if api_key:
+            return DashScopeEmbeddingFunction(api_key=api_key)
+
+        raise RuntimeError("无法加载任何 Embedding 模型：BGE 不可用且未设置 DASHSCOPE_API_KEY")
+
+
+class BGEEmbeddingFunction:
+    """BGE Embedding 函数用于 ChromaDB（本地模型）"""
+
+    def __init__(self, model_name: str = "BAAI/bge-large-zh-v1.5"):
+        self.model_name = model_name
+        self._model = None
+
+        # 设置国内镜像源（解决 Hugging Face 连接问题）
+        import os
+        os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+    def name(self) -> str:
+        """返回 embedding 函数名称，ChromaDB 要求"""
+        return self.model_name
+
+    def _get_model(self):
+        """懒加载 embedding 模型"""
+        if self._model is None:
+            from FlagEmbedding import FlagModel
+            self._model = FlagModel(
+                self.model_name,
+                query_instruction_for_retrieval="为这个句子生成表示以用于检索：",
+                use_fp16=False  # 提高精度
+            )
+        return self._model
+
+    def __call__(self, input: list[str]) -> list[list[float]]:
+        """生成 embedding"""
+        model = self._get_model()
+        if len(input) == 1:
+            embedding = model.encode(input[0])
+            return [embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)]
+        else:
+            embeddings = model.encode(input)
+            return [emb.tolist() if hasattr(emb, 'tolist') else list(emb) for emb in embeddings]
+
+
+class DashScopeEmbeddingFunction:
+    """DashScope embedding 函数用于 ChromaDB（备用方案）"""
 
     def __init__(self, api_key: str, model: str = "text-embedding-v3"):
         self.api_key = api_key
@@ -79,7 +153,7 @@ CONFIG = {
     "metadata_file": "./data/ingest_metadata.json",
 
     # Embedding 模型
-    "embedding_model": "text-embedding-v3",
+    "embedding_model": "bge-large-zh-v1.5",  # 中文优化 Embedding
 }
 
 
@@ -314,18 +388,12 @@ def ingest_all_pdfs(config: dict = None):
     print(f"\n[STEP 1] 初始化 ChromaDB: {config['chroma_path']}")
     db_client = PersistentClient(path=config["chroma_path"])
 
-    # 检查 API Key
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        print("[ERROR] 未设置 DASHSCOPE_API_KEY 环境变量")
-        return
-
-    # 使用 DashScope Embedding
-    dashscope_ef = DashScopeEmbeddingFunction(api_key=api_key, model=config.get("embedding_model", "text-embedding-v3"))
+    # 使用 BGE Embedding（本地模型，无需 API Key）
+    bge_ef = BGEEmbeddingFunction(model_name=config.get("embedding_model", "BAAI/bge-large-zh-v1.5"))
 
     collection = db_client.get_or_create_collection(
         name=config["collection_name"],
-        embedding_function=dashscope_ef,
+        embedding_function=bge_ef,
         metadata={"description": "Legal documents and policies with enhanced metadata"}
     )
 

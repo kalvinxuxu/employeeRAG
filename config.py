@@ -29,7 +29,7 @@ class ChromaConfig:
 class DashScopeConfig:
     """DashScope 配置"""
     api_key: Optional[str] = None
-    embedding_model: str = "text-embedding-v3"
+    embedding_model: str = "bge-large-zh-v1.5"  # 中文优化 Embedding 模型
     llm_model: str = "qwen-plus"
 
     def __post_init__(self):
@@ -67,7 +67,7 @@ class CacheConfig:
     similarity_threshold: float = 0.95        # 相似度阈值
     max_cache_size: int = 10000               # 最大缓存条目数
     ttl_days: Optional[int] = 7               # 缓存有效期（天）
-    embedding_model: str = "text-embedding-v3"  # Embedding 模型
+    embedding_model: str = "bge-large-zh-v1.5"  # Embedding 模型（中文优化）
 
 
 @dataclass

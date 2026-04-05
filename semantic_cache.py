@@ -43,38 +43,54 @@ class CacheEntry:
     metadata: Dict = field(default_factory=dict)  # 元数据
 
 
-class DashScopeEmbeddingFunction(EmbeddingFunction):
-    """DashScope embedding 函数，用于语义缓存"""
+class BGEEmbeddingFunction:
+    """BGE Embedding 函数，用于语义缓存（本地模型）"""
 
-    def __init__(self, api_key: str, model: str = "text-embedding-v3"):
-        self.api_key = api_key
-        self.model = model
-        self._client = None
+    def __init__(self, model_name: str = "BAAI/bge-large-zh-v1.5"):
+        self.model_name = model_name
+        self._model = None
+
+        # 设置国内镜像源（解决 Hugging Face 连接问题）
+        import os
+        os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+    def name(self) -> str:
+        """返回 embedding 函数名称，ChromaDB 要求"""
+        return self.model_name
+
+    def _get_model(self):
+        """懒加载 BGE 模型"""
+        if self._model is None:
+            from FlagEmbedding import FlagModel
+            self._model = FlagModel(
+                self.model_name,
+                query_instruction_for_retrieval="为这个句子生成表示以用于检索：",
+                use_fp16=False
+            )
+        return self._model
 
     def __call__(self, input: list[str]) -> list[list[float]]:
         """生成 embedding"""
-        import dashscope
-        dashscope.api_key = self.api_key
-
+        model = self._get_model()
         MAX_BATCH_SIZE = 10
         all_embeddings = []
 
         for i in range(0, len(input), MAX_BATCH_SIZE):
             batch = input[i:i + MAX_BATCH_SIZE]
-            response = dashscope.TextEmbedding.call(
-                model=self.model,
-                input=batch,
-                text_type="document"
-            )
-
-            if response.status_code != 200:
-                raise Exception(f"Embedding API 错误：{response.code} - {response.message}")
-
-            output = response.output.get("embeddings", [])
-            sorted_embeddings = sorted(output, key=lambda x: x.get("text_index", 0))
-            all_embeddings.extend([item.get("embedding") for item in sorted_embeddings])
+            embeddings = model.encode(batch)
+            all_embeddings.extend([emb.tolist() if hasattr(emb, 'tolist') else list(emb) for emb in embeddings])
 
         return all_embeddings
+
+    def embed_query(self, input: str) -> list[float]:
+        """为单个查询生成 embedding"""
+        model = self._get_model()
+        embedding = model.encode(input)
+        return embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)
+
+    def embed_documents(self, documents: List[str]) -> list[list[float]]:
+        """为多个文档生成 embedding"""
+        return self(documents)
 
 
 class SemanticCache:
@@ -85,8 +101,7 @@ class SemanticCache:
         cache_path: str = "./semantic_cache",
         collection_name: str = "question_cache",
         similarity_threshold: float = 0.95,
-        api_key: Optional[str] = None,
-        embedding_model: str = "text-embedding-v3",
+        embedding_model: str = "BAAI/bge-large-zh-v1.5",  # 中文优化 Embedding
         max_cache_size: int = 10000,
         ttl_days: Optional[int] = None,  # 缓存有效期（天），None 表示永久
     ):
@@ -97,7 +112,6 @@ class SemanticCache:
             cache_path: 缓存数据路径
             collection_name: 集合名称
             similarity_threshold: 相似度阈值（高于此值认为问题相同）
-            api_key: DashScope API Key
             embedding_model: Embedding 模型
             max_cache_size: 最大缓存条目数
             ttl_days: 缓存有效期（天）
@@ -105,7 +119,6 @@ class SemanticCache:
         self.cache_path = cache_path
         self.collection_name = collection_name
         self.similarity_threshold = similarity_threshold
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
         self.embedding_model = embedding_model
         self.max_cache_size = max_cache_size
         self.ttl_days = ttl_days
@@ -126,9 +139,8 @@ class SemanticCache:
     def _get_embedding_func(self):
         """懒加载 Embedding 函数"""
         if self._embedding_func is None:
-            self._embedding_func = DashScopeEmbeddingFunction(
-                api_key=self.api_key,
-                model=self.embedding_model
+            self._embedding_func = BGEEmbeddingFunction(
+                model_name=self.embedding_model
             )
         return self._embedding_func
 
@@ -184,9 +196,6 @@ class SemanticCache:
         Returns:
             缓存条目，如果未命中则返回 None
         """
-        if not self.api_key:
-            return None
-
         collection = self._get_collection()
 
         # 查询最相似的问题
@@ -244,9 +253,6 @@ class SemanticCache:
             context: 检索到的上下文（可选）
             metadata: 其他元数据
         """
-        if not self.api_key:
-            return
-
         collection = self._get_collection()
 
         # 生成唯一 ID
